@@ -1,0 +1,6 @@
+{
+  "name": "mrf-js-tests",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "MRF JavaScript bindings tests"
+}
