@@ -1,4 +1,14 @@
-// mrf_bindings.cpp
+/**
+ * @file mrf_bindings.cpp
+ * @author David Dewhurst (drd@daviddewhurst.xyz) and Proton Lumo
+ * @brief 
+ * @version 0.1
+ * @date 2026-05-24
+ * 
+ * @copyright Copyright (c) 2026, David Rushing Dewhurst
+ * 
+ */
+
 #include <emscripten/bind.h>
 #include "mrf.h"
 #include <vector>
