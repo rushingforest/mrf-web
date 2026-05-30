@@ -5,6 +5,15 @@ const model = new MRFModel();
 let wasmLoaded = false;
 let currentView = 'form'; // 'form' or 'graph'
 
+const visualState = {
+    nodePositions: new Map(), // Map<varName, {x, y}>
+    selectedNode: null,       // varName or null
+    selectedEdge: null,       // "var1,var2" or null
+    isDragging: false,
+    dragTarget: null,
+    dragOffset: { x: 0, y: 0 }
+};
+
 // ---- DOM Elements ----
 const els = {
     // Variables
@@ -61,7 +70,7 @@ const els = {
     btnDeleteSelected: document.getElementById('btn-delete-selected'),
     btnGraphInfer: document.getElementById('btn-graph-infer'),
     btnGraphReset: document.getElementById('btn-graph-reset'),
-    graphLoading: document.getElementById('graph-loading')
+    graphLoading: document.getElementById('graph-loading'),
 };
 
 // ---- Initialization ----
@@ -74,7 +83,7 @@ async function init() {
     renderEvidence();
     setupEventListeners();
 
-    // Pre-load WASM module in the background
+    // Pre-load WASM module
     try {
         const { default: createMRFModule } = await import('./mrf.js');
         await createMRFModule();
@@ -82,8 +91,11 @@ async function init() {
         els.loading.classList.add('hidden');
     } catch (err) {
         console.error('Failed to preload WASM:', err);
-        els.loading.textContent = 'WASM pre-load failed. Will retry on first inference.';
+        els.loading.textContent = 'WASM pre-load failed.';
     }
+
+    // Debug: confirm tabs are wired
+    console.log('✅ App initialized. Tab form:', !!els.tabForm, 'Tab graph:', !!els.tabGraph);
 }
 
 // ---- View Switching ----
@@ -91,6 +103,7 @@ async function init() {
 function switchView(viewName) {
     if (currentView === viewName) return;
     
+    console.log(`🔄 Switching view to: ${viewName}`);
     currentView = viewName;
     
     // Update tabs
@@ -103,9 +116,10 @@ function switchView(viewName) {
     
     // Sync state
     if (viewName === 'graph') {
+        console.log("🎨 Initializing Graph View...");
         renderGraphFromModel();
     } else {
-        // When switching back to form, just re-render lists (already done by model state)
+        console.log("📝 Switching to Form View...");
         renderVariables();
         renderFactors();
         renderEvidence();
@@ -134,40 +148,479 @@ function setupEventListeners() {
     els.tabForm.addEventListener('click', () => switchView('form'));
     els.tabGraph.addEventListener('click', () => switchView('graph'));
     
-    // Graph Toolbar (Placeholders for now)
-    els.btnAddNode.addEventListener('click', () => {
-        alert('Add Node dialog coming in Phase 5');
+    // Event Delegation for Sidebar
+    els.sidebarContent.addEventListener('click', (e) => {
+        const target = e.target;
+        
+        if (target.classList.contains('btn') && target.dataset.action) {
+            const action = target.dataset.action;
+            const varName = target.dataset.var;
+            const var1 = target.dataset.var1;
+            const var2 = target.dataset.var2;
+            
+            let needsRender = false;
+            
+            if (action === 'set-evidence') {
+                const select = target.closest('.evidence-section').querySelector('select');
+                if (select && select.value) {
+                    model.setEvidence(varName, select.value);
+                    needsRender = true;
+                }
+            } else if (action === 'clear-evidence') {
+                model.clearEvidence(varName);
+                needsRender = true;
+            } else if (action === 'save-unary') {
+                if (doSaveUnaryWeights(varName)) {
+                    needsRender = true;
+                }
+            } else if (action === 'save-binary') {
+                if (doSaveBinaryWeights(var1, var2)) {
+                    needsRender = true;
+                }
+            }
+            
+            if (needsRender) {
+                renderGraphFromModel();
+                renderEvidence();
+            }
+        }
     });
-    els.btnLinkMode.addEventListener('click', () => {
-        alert('Link Mode coming in Phase 3');
-    });
-    els.btnDeleteSelected.addEventListener('click', () => {
-        alert('Delete Selected coming in Phase 3');
-    });
-    els.btnGraphInfer.addEventListener('click', handleInference); // Reuse existing handler
-    els.btnGraphReset.addEventListener('click', handleReset); // Reuse existing handler
 }
 
 function renderGraphFromModel() {
+    console.log("🔄 Rendering Graph...");
+    
+    // Safety check: Ensure canvas exists
+    if (!els.canvas || !els.nodesLayer || !els.edgesLayer) {
+        console.error("❌ Canvas elements not found. Check HTML structure.");
+        return;
+    }
+
     // Clear canvas
     els.edgesLayer.innerHTML = '';
     els.nodesLayer.innerHTML = '';
-    
-    // For now, just show a message if there are no nodes
-    if (model.variables.size === 0) {
-        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
-        text.setAttribute("x", "50%");
-        text.setAttribute("y", "50%");
-        text.setAttribute("text-anchor", "middle");
-        text.setAttribute("fill", "#7f8c8d");
-        text.textContent = "Add nodes to start building your graph";
+
+    const vars = Array.from(model.variables.keys());
+    console.log(`📊 Variables in model: ${vars.length}`, vars);
+
+    if (vars.length === 0) {
+        const text = createSVGElement('text', {
+            x: '50%', y: '50%', 'text-anchor': 'middle', fill: '#7f8c8d', 'font-size': '16px'
+        }, "Add nodes to start building your graph");
         els.nodesLayer.appendChild(text);
+        updateSidebar(null);
+        console.log("✅ Graph rendered (empty)");
         return;
     }
+
+    // 1. Ensure positions exist for all nodes
+    vars.forEach(name => {
+        if (!visualState.nodePositions.has(name)) {
+            // Auto-position: grid layout
+            const count = visualState.nodePositions.size;
+            const cols = Math.ceil(Math.sqrt(vars.length));
+            const x = 100 + (count % cols) * 150;
+            const y = 100 + Math.floor(count / cols) * 120;
+            visualState.nodePositions.set(name, { x, y });
+            console.log(`📍 Auto-positioned ${name} at (${x}, ${y})`);
+        }
+    });
+
+    // 2. Render Nodes
+    vars.forEach(name => {
+        const pos = visualState.nodePositions.get(name);
+        const info = model.variables.get(name);
+        const isEvidence = model.evidence.has(name);
+        const isSelected = visualState.selectedNode === name;
+
+        const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        group.setAttribute("transform", `translate(${pos.x}, ${pos.y})`);
+        group.setAttribute("data-var", name);
+        group.setAttribute("class", "node-group");
+
+        // Calculate size
+        const textWidth = Math.max(60, name.length * 10 + 20);
+        const textHeight = 40;
+        const width = textWidth;
+        const height = textHeight;
+
+        // Background Rect
+        const rect = createSVGElement('rect', {
+            x: -width/2, y: -height/2, width: width, height: height,
+            class: `node-rect ${isSelected ? 'selected' : ''} ${isEvidence ? 'evidence' : ''}`
+        });
+
+        // Text
+        const text = createSVGElement('text', {
+            x: 0, y: 0, class: 'node-text'
+        }, name);
+
+        // Level count badge
+        const badge = createSVGElement('text', {
+            x: 0, y: height/2 - 5, 'font-size': '10px', fill: 'white', 'text-anchor': 'middle'
+        }, `${info.levels.size} lvl`);
+
+        group.appendChild(rect);
+        group.appendChild(text);
+        group.appendChild(badge);
+
+        // Event Listeners
+        group.addEventListener('mousedown', (e) => handleNodeMouseDown(e, name));
+        group.addEventListener('click', (e) => {
+            e.stopPropagation();
+            handleNodeClick(name);
+        });
+
+        els.nodesLayer.appendChild(group);
+    });
+
+    // 3. Render Edges
+    model.binaryFactors.forEach(f => {
+        const pos1 = visualState.nodePositions.get(f.var1);
+        const pos2 = visualState.nodePositions.get(f.var2);
+        
+        if (pos1 && pos2) {
+            const line = createSVGElement('line', {
+                x1: pos1.x, y1: pos1.y, x2: pos2.x, y2: pos2.y,
+                class: 'edge-line'
+            });
+            line.dataset.var1 = f.var1;
+            line.dataset.var2 = f.var2;
+            line.addEventListener('click', (e) => {
+                e.stopPropagation();
+                handleEdgeClick(f.var1, f.var2);
+            });
+            els.edgesLayer.appendChild(line);
+        } else {
+            console.warn(`⚠️ Missing position for edge: ${f.var1} <-> ${f.var2}`);
+        }
+    });
+
+    // 4. Update Sidebar
+    updateSidebar(visualState.selectedNode || visualState.selectedEdge);
+    console.log("✅ Graph rendered successfully");
+}
+
+// ---- Interaction Handlers ----
+
+function handleNodeMouseDown(e, varName) {
+    e.preventDefault();
+    visualState.isDragging = true;
+    visualState.dragTarget = varName;
     
-    // TODO: Implement actual rendering in Phase 2
-    // For now, just log that we are in graph view
-    console.log("Graph view active. Rendering logic to be implemented in Phase 2.");
+    const pos = visualState.nodePositions.get(varName);
+    const svgPoint = getSVGPoint(e);
+    
+    visualState.dragOffset = {
+        x: svgPoint.x - pos.x,
+        y: svgPoint.y - pos.y
+    };
+    
+    // Select the node on drag start
+    handleNodeClick(varName);
+}
+
+function handleNodeClick(varName) {
+    visualState.selectedNode = varName;
+    visualState.selectedEdge = null;
+    renderGraphFromModel(); // Re-render to update selection styles
+}
+
+function handleEdgeClick(var1, var2) {
+    visualState.selectedEdge = `${var1},${var2}`;
+    visualState.selectedNode = null;
+    renderGraphFromModel();
+}
+
+function handleCanvasClick(e) {
+    // Deselect if clicking on empty canvas
+    if (e.target === els.canvas || e.target.tagName === 'rect' && e.target.id === 'grid') {
+        visualState.selectedNode = null;
+        visualState.selectedEdge = null;
+        renderGraphFromModel();
+    }
+}
+
+// Global mouse move/up for dragging
+document.addEventListener('mousemove', (e) => {
+    if (!visualState.isDragging || !visualState.dragTarget) return;
+    
+    const svgPoint = getSVGPoint(e);
+    const newPos = {
+        x: svgPoint.x - visualState.dragOffset.x,
+        y: svgPoint.y - visualState.dragOffset.y
+    };
+    
+    visualState.nodePositions.set(visualState.dragTarget, newPos);
+    
+    // Re-render edges immediately for smooth drag
+    renderEdgesOnly();
+});
+
+document.addEventListener('mouseup', () => {
+    visualState.isDragging = false;
+    visualState.dragTarget = null;
+});
+
+// ---- Helpers ----
+
+function getSVGPoint(e) {
+    const CTM = els.canvas.getScreenCTM();
+    return {
+        x: (e.clientX - CTM.e) / CTM.a,
+        y: (e.clientY - CTM.f) / CTM.d
+    };
+}
+
+function createSVGElement(tag, attrs, textContent = null) {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [key, val] of Object.entries(attrs)) {
+        el.setAttribute(key, val);
+    }
+    if (textContent !== null) {
+        el.textContent = textContent;
+    }
+    return el;
+}
+
+function renderEdgesOnly() {
+    els.edgesLayer.innerHTML = '';
+    model.binaryFactors.forEach(f => {
+        const pos1 = visualState.nodePositions.get(f.var1);
+        const pos2 = visualState.nodePositions.get(f.var2);
+        if (pos1 && pos2) {
+            const line = createSVGElement('line', {
+                x1: pos1.x, y1: pos1.y, x2: pos2.x, y2: pos2.y,
+                class: 'edge-line'
+            });
+            line.dataset.var1 = f.var1;
+            line.dataset.var2 = f.var2;
+            line.addEventListener('click', (e) => {
+                e.stopPropagation();
+                handleEdgeClick(f.var1, f.var2);
+            });
+            els.edgesLayer.appendChild(line);
+        }
+    });
+}
+
+// ---- Sidebar Logic ----
+
+function doSaveUnaryWeights(varName) {
+    const info = model.variables.get(varName);
+    if (!info) return false;
+
+    const entries = {};
+    let hasChanges = false;
+    let allDefault = true;
+
+    Array.from(info.levels.keys()).forEach(lvl => {
+        const input = document.getElementById(`weight-${varName}-${lvl}`);
+        if (input) {
+            const val = parseFloat(input.value);
+            if (!isNaN(val) && val >= 0) {
+                entries[lvl] = val;
+                if (val !== 1.0) {
+                    hasChanges = true;
+                    allDefault = false;
+                }
+            } else {
+                // If input is invalid, treat as 1.0 (default)
+                entries[lvl] = 1.0;
+            }
+        } else {
+            // Input not found? This shouldn't happen, but fallback to 1.0
+            entries[lvl] = 1.0;
+        }
+    });
+
+    // If all values are 1.0, we don't need to store a factor (it's implicit)
+    if (allDefault) {
+        // Check if a factor exists and remove it if it's all 1s
+        const existingIndex = model.unaryFactors.findIndex(f => f.variable === varName);
+        if (existingIndex !== -1) {
+            // Check if the existing factor is also all 1s
+            const existingFactor = model.unaryFactors[existingIndex];
+            const isAllOne = Array.from(existingFactor.entries.values()).every(v => v === 1.0);
+            if (isAllOne) {
+                // Remove it to keep the model clean
+                model.unaryFactors.splice(existingIndex, 1);
+                console.log(`🧹 Removed redundant unary factor for ${varName}`);
+                return true; // Changed (removed)
+            }
+        }
+        return false; // No change needed
+    }
+
+    // If we have non-default values, update or add the factor
+    const existingIndex = model.unaryFactors.findIndex(f => f.variable === varName);
+    if (existingIndex !== -1) {
+        // Replace existing
+        model.unaryFactors[existingIndex] = { type: 'unary', variable: varName, entries: new Map(Object.entries(entries)) };
+        console.log(`🔄 Updated unary factor for ${varName}`);
+        return true;
+    } else {
+        // Add new
+        model.unaryFactors.push({ type: 'unary', variable: varName, entries: new Map(Object.entries(entries)) });
+        console.log(`➕ Added new unary factor for ${varName}`);
+        return true;
+    }
+}
+
+function doSaveBinaryWeights(var1, var2) {
+    const factor = model.binaryFactors.find(f => f.var1 === var1 && f.var2 === var2) || 
+                   model.binaryFactors.find(f => f.var1 === var2 && f.var2 === var1);
+    
+    if (!factor) {
+        console.warn(`⚠️ No factor found for ${var1} <-> ${var2} to update.`);
+        return false;
+    }
+
+    const entries = {};
+    const levels1 = Array.from(model.variables.get(var1).levels.keys());
+    const levels2 = Array.from(model.variables.get(var2).levels.keys());
+    
+    let hasChanges = false;
+    let allDefault = true;
+
+    levels1.forEach(lvl1 => {
+        levels2.forEach(lvl2 => {
+            const input = document.getElementById(`edge-weight-${var1}-${var2}-${lvl1}-${lvl2}`);
+            if (input) {
+                const val = parseFloat(input.value);
+                if (!isNaN(val) && val >= 0) {
+                    entries[`${lvl1},${lvl2}`] = val;
+                    if (val !== 1.0) {
+                        hasChanges = true;
+                        allDefault = false;
+                    }
+                } else {
+                    entries[`${lvl1},${lvl2}`] = 1.0;
+                }
+            } else {
+                entries[`${lvl1},${lvl2}`] = 1.0;
+            }
+        });
+    });
+
+    // If all values are 1.0, remove the factor
+    if (allDefault) {
+        const existingIndex = model.binaryFactors.findIndex(
+            f => (f.var1 === var1 && f.var2 === var2) || (f.var1 === var2 && f.var2 === var1)
+        );
+        if (existingIndex !== -1) {
+            model.binaryFactors.splice(existingIndex, 1);
+            console.log(`🧹 Removed redundant binary factor for ${var1} <-> ${var2}`);
+            return true;
+        }
+        return false;
+    }
+
+    // Update existing factor
+    const existingIndex = model.binaryFactors.findIndex(
+        f => (f.var1 === var1 && f.var2 === var2) || (f.var1 === var2 && f.var2 === var1)
+    );
+    if (existingIndex !== -1) {
+        model.binaryFactors[existingIndex] = { type: 'binary', var1, var2, entries: new Map(Object.entries(entries)) };
+        console.log(`🔄 Updated binary factor for ${var1} <-> ${var2}`);
+        return true;
+    }
+
+    return false;
+}
+
+function updateSidebar(selection) {
+    els.sidebarContent.innerHTML = '';
+    
+    if (!selection) {
+        els.sidebarContent.innerHTML = '<p class="hint">Select a node or edge to edit properties.</p>';
+        return;
+    }
+
+    if (model.variables.has(selection)) {
+        // Node Selected
+        const info = model.variables.get(selection);
+        const isEvidence = model.evidence.has(selection);
+        const evidenceLevel = isEvidence ? model.evidence.get(selection) : null;
+
+        let html = `<h4>Variable: ${selection}</h4>`;
+        html += `<p><strong>Levels:</strong> ${Array.from(info.levels.keys()).join(', ')}</p>`;
+        
+        // Evidence Section
+        html += `<div class="evidence-section" style="margin: 10px 0; padding: 10px; background: #f0f0f0; border-radius: 4px;">`;
+        html += `<strong>Evidence:</strong><br>`;
+        if (isEvidence) {
+            html += `<span style="color: #27ae60; font-weight: bold;">${evidenceLevel}</span>`;
+            html += `<button class="btn btn-small btn-danger" style="margin-left: 10px;" data-action="clear-evidence" data-var="${selection}">Clear</button>`;
+        } else {
+            html += `<select id="evidence-select-${selection}" style="margin-right: 5px;">`;
+            Array.from(info.levels.keys()).forEach(lvl => {
+                html += `<option value="${lvl}">${lvl}</option>`;
+            });
+            html += `</select>`;
+            html += `<button class="btn btn-small btn-primary" data-action="set-evidence" data-var="${selection}">Set</button>`;
+        }
+        html += `</div>`;
+
+        // Unary Factor Section
+        html += `<div style="margin-top: 15px;"><strong>Unary Factor Weights (Optional)</strong>`;
+        html += `<p style="font-size: 0.85rem; color: #7f8c8d;">Leave blank for uniform (1.0).</p>`;
+        html += `<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 5px;">`;
+        Array.from(info.levels.keys()).forEach(lvl => {
+            const factor = model.unaryFactors.find(f => f.variable === selection);
+            const val = factor ? (factor.entries.get(lvl) || 1.0) : 1.0;
+            html += `<div style="display: flex; align-items: center;">`;
+            html += `<span style="width: 80px; font-size: 0.9rem;">${lvl}:</span>`;
+            html += `<input type="number" step="0.1" min="0" value="${val}" id="weight-${selection}-${lvl}" style="width: 60px; padding: 2px;">`;
+            html += `</div>`;
+        });
+        html += `</div>`;
+        html += `<button class="btn btn-small btn-primary" style="margin-top: 10px;" data-action="save-unary" data-var="${selection}">Apply Weights</button>`;
+        html += `</div>`;
+
+        els.sidebarContent.innerHTML = html;
+
+    } else {
+        // Edge Selected
+        const [var1, var2] = selection.split(',');
+        const factor = model.binaryFactors.find(f => f.var1 === var1 && f.var2 === var2) || 
+                       model.binaryFactors.find(f => f.var1 === var2 && f.var2 === var1);
+        
+        let html = `<h4>Factor: ${var1} ↔ ${var2}</h4>`;
+        
+        if (!factor) {
+            html += `<p>No factor data found. This might be a stale edge.</p>`;
+        } else {
+            html += `<p style="font-size: 0.85rem; color: #7f8c8d;">Edit weights below. Default is 1.0.</p>`;
+            html += `<div style="overflow-x: auto; margin-top: 10px;">`;
+            html += `<table style="border-collapse: collapse; width: 100%;">`;
+            
+            // Header
+            html += `<tr><th></th>`;
+            const levels2 = Array.from(model.variables.get(var2).levels.keys());
+            levels2.forEach(lvl => html += `<th style="padding: 5px; border: 1px solid #ddd;">${lvl}</th>`);
+            html += `</tr>`;
+            
+            // Rows
+            const levels1 = Array.from(model.variables.get(var1).levels.keys());
+            levels1.forEach(lvl1 => {
+                html += `<tr><td style="padding: 5px; border: 1px solid #ddd; font-weight: bold;">${lvl1}</td>`;
+                levels2.forEach(lvl2 => {
+                    const key = `${lvl1},${lvl2}`;
+                    const val = factor.entries.get(key) || 1.0;
+                    html += `<td style="padding: 5px; border: 1px solid #ddd;">`;
+                    html += `<input type="number" step="0.1" min="0" value="${val}" id="edge-weight-${var1}-${var2}-${lvl1}-${lvl2}" style="width: 100%; box-sizing: border-box;">`;
+                    html += `</td>`;
+                });
+                html += `</tr>`;
+            });
+            html += `</table>`;
+            html += `</div>`;
+            html += `<button class="btn btn-small btn-primary" style="margin-top: 10px;" data-action="save-binary" data-var1="${var1}" data-var2="${var2}">Apply Weights</button>`;
+        }
+        
+        els.sidebarContent.innerHTML = html;
+    }
 }
 
 // ---- Variable Management ----

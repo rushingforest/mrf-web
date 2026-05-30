@@ -15,8 +15,8 @@
 
         <!-- NEW: View Tabs -->
         <div class="view-tabs">
-            <button id="tab-form" class="tab-btn active" onclick="switchView('form')">Form View</button>
-            <button id="tab-graph" class="tab-btn" onclick="switchView('graph')">Graph View</button>
+            <button id="tab-form" class="tab-btn active">Form View</button>
+            <button id="tab-graph" class="tab-btn">Graph View</button>
         </div>
 
         <!-- EXISTING: Wrapped in Form View Container -->
@@ -113,26 +113,19 @@
                 <!-- Main Canvas Area -->
                 <div class="graph-canvas-wrapper">
                     <svg id="mrf-canvas" width="100%" height="500" viewBox="0 0 800 500" preserveAspectRatio="xMidYMid meet">
-                        <!-- Grid background (will be drawn via JS or CSS) -->
                         <defs>
                             <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
                                 <circle cx="1" cy="1" r="1" fill="#e0e0e0" />
                             </pattern>
                         </defs>
                         <rect width="100%" height="100%" fill="url(#grid)" />
-                        
-                        <!-- Edges will be appended here -->
                         <g id="edges-layer"></g>
-                        
-                        <!-- Nodes will be appended here -->
                         <g id="nodes-layer"></g>
                     </svg>
-                    
-                    <!-- Overlay for loading/instructions -->
                     <div id="graph-loading" class="hidden">Loading Graph...</div>
                 </div>
 
-                <!-- Sidebar for Properties -->
+                <!-- Sidebar -->
                 <div class="graph-sidebar" id="graph-sidebar">
                     <h3>Properties</h3>
                     <div id="sidebar-content">

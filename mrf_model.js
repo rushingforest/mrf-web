@@ -115,12 +115,6 @@ export class MRFModel {
 
     // ---- Factor Management ----
 
-    /**
-     * Adds a sparse univariate factor.
-     * @param {string} variable - Variable name.
-     * @param {Object} entries - Map of levelName -> value. Unspecified levels default to 1.0.
-     * @returns {number} Index of the added factor (for deletion).
-     */
     addUnaryFactor(variable, entries) {
         if (!this.variables.has(variable)) {
             throw new Error(`Variable "${variable}" not found.`);
@@ -128,17 +122,20 @@ export class MRFModel {
         this._validateUnaryEntries(variable, entries);
 
         const entryMap = new Map(Object.entries(entries));
+        
+        // Check if a factor already exists for this variable
+        const existingIndex = this.unaryFactors.findIndex(f => f.variable === variable);
+        if (existingIndex !== -1) {
+            // Replace existing
+            this.unaryFactors[existingIndex] = { type: 'unary', variable, entries: entryMap };
+            return existingIndex;
+        }
+        
+        // Add new
         this.unaryFactors.push({ type: 'unary', variable, entries: entryMap });
         return this.unaryFactors.length - 1;
     }
 
-    /**
-     * Adds a sparse bivariate factor.
-     * @param {string} var1 - First variable name.
-     * @param {string} var2 - Second variable name.
-     * @param {Object} entries - Map of "level1,level2" -> value. Unspecified pairs default to 1.0.
-     * @returns {number} Index of the added factor (for deletion).
-     */
     addBinaryFactor(var1, var2, entries) {
         if (!this.variables.has(var1)) {
             throw new Error(`Variable "${var1}" not found.`);
@@ -152,6 +149,18 @@ export class MRFModel {
         this._validateBinaryEntries(var1, var2, entries);
 
         const entryMap = new Map(Object.entries(entries));
+        
+        // Check if a factor already exists for this variable pair
+        const existingIndex = this.binaryFactors.findIndex(
+            f => (f.var1 === var1 && f.var2 === var2) || (f.var1 === var2 && f.var2 === var1)
+        );
+        if (existingIndex !== -1) {
+            // Replace existing
+            this.binaryFactors[existingIndex] = { type: 'binary', var1, var2, entries: entryMap };
+            return existingIndex;
+        }
+        
+        // Add new
         this.binaryFactors.push({ type: 'binary', var1, var2, entries: entryMap });
         return this.binaryFactors.length - 1;
     }

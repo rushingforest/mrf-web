@@ -360,7 +360,7 @@ header h1 {
     font-size: 0.9rem;
 }
 
-/* --- Graph Elements (Placeholder Styles) --- */
+/* --- Graph Elements --- */
 .node-rect {
     fill: #3498db;
     stroke: #2980b9;
@@ -373,6 +373,7 @@ header h1 {
 
 .node-rect:hover {
     filter: brightness(1.1);
+    stroke-width: 3;
 }
 
 .node-rect.selected {
@@ -414,21 +415,19 @@ header h1 {
     stroke-width: 3;
 }
 
-/* --- Responsive --- */
-@media (max-width: 768px) {
-    .graph-layout {
-        flex-direction: column;
-        height: auto;
-    }
-    
-    .graph-sidebar {
-        width: 100%;
-        border-left: none;
-        border-top: 1px solid #ecf0f1;
-        max-height: 200px;
-    }
-    
-    .graph-toolbar {
-        flex-wrap: wrap;
-    }
+/* --- Sidebar Inputs --- */
+#sidebar-content input[type="number"] {
+    padding: 4px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    width: 100%;
+}
+
+#sidebar-content table {
+    font-size: 0.9rem;
+}
+
+#sidebar-content th {
+    background-color: #f8f9fa;
+    font-weight: bold;
 }
