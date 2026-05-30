@@ -3,6 +3,7 @@ import { MRFModel } from './mrf_model.js';
 // ---- State ----
 const model = new MRFModel();
 let wasmLoaded = false;
+let currentView = 'form'; // 'form' or 'graph'
 
 // ---- DOM Elements ----
 const els = {
@@ -41,7 +42,26 @@ const els = {
     loading: document.getElementById('loading'),
 
     // Results
-    resultsContainer: document.getElementById('results-container')
+    resultsContainer: document.getElementById('results-container'),
+
+    // View Tabs
+    tabForm: document.getElementById('tab-form'),
+    tabGraph: document.getElementById('tab-graph'),
+    formView: document.getElementById('form-view'),
+    graphView: document.getElementById('graph-view'),
+    
+    // Graph Elements
+    canvas: document.getElementById('mrf-canvas'),
+    edgesLayer: document.getElementById('edges-layer'),
+    nodesLayer: document.getElementById('nodes-layer'),
+    graphSidebar: document.getElementById('graph-sidebar'),
+    sidebarContent: document.getElementById('sidebar-content'),
+    btnAddNode: document.getElementById('btn-add-node'),
+    btnLinkMode: document.getElementById('btn-link-mode'),
+    btnDeleteSelected: document.getElementById('btn-delete-selected'),
+    btnGraphInfer: document.getElementById('btn-graph-infer'),
+    btnGraphReset: document.getElementById('btn-graph-reset'),
+    graphLoading: document.getElementById('graph-loading')
 };
 
 // ---- Initialization ----
@@ -63,7 +83,32 @@ async function init() {
     } catch (err) {
         console.error('Failed to preload WASM:', err);
         els.loading.textContent = 'WASM pre-load failed. Will retry on first inference.';
-        // Don't block the UI — inference will attempt to load again
+    }
+}
+
+// ---- View Switching ----
+
+function switchView(viewName) {
+    if (currentView === viewName) return;
+    
+    currentView = viewName;
+    
+    // Update tabs
+    els.tabForm.classList.toggle('active', viewName === 'form');
+    els.tabGraph.classList.toggle('active', viewName === 'graph');
+    
+    // Update containers
+    els.formView.classList.toggle('hidden', viewName === 'graph');
+    els.graphView.classList.toggle('hidden', viewName === 'form');
+    
+    // Sync state
+    if (viewName === 'graph') {
+        renderGraphFromModel();
+    } else {
+        // When switching back to form, just re-render lists (already done by model state)
+        renderVariables();
+        renderFactors();
+        renderEvidence();
     }
 }
 
@@ -84,6 +129,45 @@ function setupEventListeners() {
     // Controls
     els.btnInfer.addEventListener('click', handleInference);
     els.btnReset.addEventListener('click', handleReset);
+
+    // View Tabs
+    els.tabForm.addEventListener('click', () => switchView('form'));
+    els.tabGraph.addEventListener('click', () => switchView('graph'));
+    
+    // Graph Toolbar (Placeholders for now)
+    els.btnAddNode.addEventListener('click', () => {
+        alert('Add Node dialog coming in Phase 5');
+    });
+    els.btnLinkMode.addEventListener('click', () => {
+        alert('Link Mode coming in Phase 3');
+    });
+    els.btnDeleteSelected.addEventListener('click', () => {
+        alert('Delete Selected coming in Phase 3');
+    });
+    els.btnGraphInfer.addEventListener('click', handleInference); // Reuse existing handler
+    els.btnGraphReset.addEventListener('click', handleReset); // Reuse existing handler
+}
+
+function renderGraphFromModel() {
+    // Clear canvas
+    els.edgesLayer.innerHTML = '';
+    els.nodesLayer.innerHTML = '';
+    
+    // For now, just show a message if there are no nodes
+    if (model.variables.size === 0) {
+        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        text.setAttribute("x", "50%");
+        text.setAttribute("y", "50%");
+        text.setAttribute("text-anchor", "middle");
+        text.setAttribute("fill", "#7f8c8d");
+        text.textContent = "Add nodes to start building your graph";
+        els.nodesLayer.appendChild(text);
+        return;
+    }
+    
+    // TODO: Implement actual rendering in Phase 2
+    // For now, just log that we are in graph view
+    console.log("Graph view active. Rendering logic to be implemented in Phase 2.");
 }
 
 // ---- Variable Management ----
