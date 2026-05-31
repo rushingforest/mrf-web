@@ -1,17 +1,26 @@
-import { MRFModel } from './mrf_model.js';
+import { MRFModel } from './mrf_model.js?v=2';
 
 // ---- State ----
 const model = new MRFModel();
 let wasmLoaded = false;
 let currentView = 'form'; // 'form' or 'graph'
 
+// Visual State for Graph View
 const visualState = {
-    nodePositions: new Map(), // Map<varName, {x, y}>
-    selectedNode: null,       // varName or null
-    selectedEdge: null,       // "var1,var2" or null
+    nodePositions: new Map(),
+    selectedNode: null,
+    selectedEdge: null,
     isDragging: false,
     dragTarget: null,
-    dragOffset: { x: 0, y: 0 }
+    dragOffset: { x: 0, y: 0 },
+    // NEW: Link Mode State
+    isLinkMode: false,
+    linkStartNode: null, // The node we started dragging from
+    scale: 1,
+    offsetX: 0,
+    offsetY: 0,
+    isPanning: false,
+    panStart: { x: 0, y: 0 }
 };
 
 // ---- DOM Elements ----
@@ -126,6 +135,134 @@ function switchView(viewName) {
     }
 }
 
+function handleDeleteSelected() {
+    if (!visualState.selectedNode && !visualState.selectedEdge) {
+        alert("Please select a node or an edge to delete.");
+        return;
+    }
+
+    if (visualState.selectedNode) {
+        const varName = visualState.selectedNode;
+        if (confirm(`Are you sure you want to delete variable "${varName}"? This will also remove all connected edges.`)) {
+            model.removeVariable(varName);
+            // Clear selection
+            visualState.selectedNode = null;
+            visualState.selectedEdge = null;
+            // Remove position
+            visualState.nodePositions.delete(varName);
+            renderGraphFromModel();
+            renderVariables(); // Update form view
+            renderFactors();   // Update form view
+            renderEvidence();  // Update form view
+        }
+    } else if (visualState.selectedEdge) {
+        const [var1, var2] = visualState.selectedEdge.split(',');
+        if (confirm(`Are you sure you want to delete the edge between "${var1}" and "${var2}"?`)) {
+            // Find and remove the factor
+            const existingIndex = model.binaryFactors.findIndex(
+                f => (f.var1 === var1 && f.var2 === var2) || (f.var1 === var2 && f.var2 === var1)
+            );
+            if (existingIndex !== -1) {
+                model.binaryFactors.splice(existingIndex, 1);
+            }
+            // Clear selection
+            visualState.selectedNode = null;
+            visualState.selectedEdge = null;
+            renderGraphFromModel();
+            renderFactors(); // Update form view
+        }
+    }
+}
+
+// ---- Link Mode Logic ----
+
+function toggleLinkMode() {
+    visualState.isLinkMode = !visualState.isLinkMode;
+    visualState.linkStartNode = null;
+    
+    // Update button text
+    els.btnLinkMode.textContent = visualState.isLinkMode ? "Link Mode: ON" : "Link Mode: OFF";
+    els.btnLinkMode.classList.toggle('btn-primary', visualState.isLinkMode);
+    els.btnLinkMode.classList.toggle('btn-secondary', !visualState.isLinkMode);
+    
+    // Change cursor
+    els.canvas.style.cursor = visualState.isLinkMode ? "crosshair" : "grab";
+    
+    // Clear any partial link
+    if (!visualState.isLinkMode) {
+        // Remove temporary preview line if it exists
+        const previewLine = document.getElementById('preview-line');
+        if (previewLine) previewLine.remove();
+    }
+}
+
+function handleNodeMouseDownLink(e, varName) {
+    if (!visualState.isLinkMode) return;
+    
+    e.preventDefault();
+    visualState.linkStartNode = varName;
+    
+    // Create a temporary preview line
+    const pos = visualState.nodePositions.get(varName);
+    const svgPoint = getSVGPoint(e);
+    
+    const previewLine = createSVGElement('line', {
+        id: 'preview-line',
+        x1: pos.x, y1: pos.y, x2: svgPoint.x, y2: svgPoint.y,
+        stroke: '#e67e22', strokeWidth: 3, strokeDasharray: '5,5',
+        'pointer-events': 'none'
+    });
+    
+    els.edgesLayer.appendChild(previewLine);
+}
+
+function handleNodeMouseUpLink(e, varName) {
+    if (!visualState.isLinkMode || !visualState.linkStartNode) return;
+    
+    const startNode = visualState.linkStartNode;
+    
+    // Prevent self-loops
+    if (startNode === varName) {
+        alert("Cannot create an edge between a variable and itself.");
+        resetLinkPreview();
+        return;
+    }
+    
+    // Check if edge already exists
+    const existing = model.binaryFactors.find(
+        f => (f.var1 === startNode && f.var2 === varName) || (f.var1 === varName && f.var2 === startNode)
+    );
+    
+    if (existing) {
+        alert(`An edge already exists between "${startNode}" and "${varName}".`);
+        resetLinkPreview();
+        return;
+    }
+    
+    // Create the edge (Binary Factor with all 1s)
+    try {
+        model.addBinaryFactor(startNode, varName, {}); // Empty entries = all 1s
+        console.log(`✅ Created edge: ${startNode} <-> ${varName}`);
+        
+        // Select the new edge
+        visualState.selectedEdge = `${startNode},${varName}`;
+        visualState.selectedNode = null;
+        
+        // Reset link mode
+        toggleLinkMode();
+        
+        renderGraphFromModel();
+    } catch (err) {
+        alert(err.message);
+    }
+}
+
+function resetLinkPreview() {
+    visualState.linkStartNode = null;
+    const previewLine = document.getElementById('preview-line');
+    if (previewLine) previewLine.remove();
+}
+
 // ---- Event Listeners ----
 
 function setupEventListeners() {
@@ -183,6 +320,91 @@ function setupEventListeners() {
                 renderGraphFromModel();
                 renderEvidence();
             }
+        }
+    });
+    
+    // View Tabs
+    els.tabForm.addEventListener('click', () => switchView('form'));
+    els.tabGraph.addEventListener('click', () => switchView('graph'));
+
+    // Graph Toolbar
+    els.btnAddNode.addEventListener('click', () => {
+        // Placeholder for Phase 5
+        const name = prompt("Enter variable name:");
+        if (!name) return;
+        const levelsStr = prompt("Enter levels (comma-separated):");
+        if (!levelsStr) return;
+        const levels = levelsStr.split(',').map(l => l.trim()).filter(l => l);
+        if (levels.length === 0) {
+            alert("At least one level is required.");
+            return;
+        }
+        try {
+            model.addVariable(name, levels);
+            renderGraphFromModel();
+            renderVariables();
+            updateAllDropdowns();
+        } catch (err) {
+            alert(err.message);
+        }
+    });
+
+    els.btnLinkMode.addEventListener('click', toggleLinkMode);
+    
+    els.btnDeleteSelected.addEventListener('click', handleDeleteSelected);
+    
+    els.btnGraphInfer.addEventListener('click', handleInference);
+    els.btnGraphReset.addEventListener('click', handleReset);
+
+    els.canvas.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const zoomIntensity = 0.1;
+        const delta = e.deltaY > 0 ? -zoomIntensity : zoomIntensity;
+        const newScale = Math.min(Math.max(0.1, visualState.scale + delta), 5);
+        
+        // Zoom towards mouse pointer
+        const rect = els.canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        
+        // Calculate new offset to keep mouse point stationary
+        const scaleRatio = newScale / visualState.scale;
+        visualState.offsetX = mouseX - (mouseX - visualState.offsetX) * scaleRatio;
+        visualState.offsetY = mouseY - (mouseY - visualState.offsetY) * scaleRatio;
+        visualState.scale = newScale;
+        
+        renderGraphFromModel();
+    });
+
+    els.canvas.addEventListener('mousedown', (e) => {
+        // Middle mouse button or Spacebar held (simulated by checking modifier if needed, but let's stick to middle click for panning)
+        if (e.button === 1) { // Middle click
+            e.preventDefault();
+            visualState.isPanning = true;
+            visualState.panStart = { x: e.clientX, y: e.clientY };
+            els.canvas.style.cursor = 'grabbing';
+        }
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        // ... (existing drag and link logic) ...
+
+        // Handle Panning
+        if (visualState.isPanning) {
+            const dx = e.clientX - visualState.panStart.x;
+            const dy = e.clientY - visualState.panStart.y;
+            visualState.offsetX += dx;
+            visualState.offsetY += dy;
+            visualState.panStart = { x: e.clientX, y: e.clientY };
+            renderGraphFromModel();
+        }
+    });
+
+    document.addEventListener('mouseup', () => {
+        // ... (existing logic) ...
+        if (visualState.isPanning) {
+            visualState.isPanning = false;
+            els.canvas.style.cursor = 'grab';
         }
     });
 }
@@ -280,9 +502,12 @@ function renderGraphFromModel() {
         const pos2 = visualState.nodePositions.get(f.var2);
         
         if (pos1 && pos2) {
+            const isSelected = visualState.selectedEdge === `${f.var1},${f.var2}` || 
+                   visualState.selectedEdge === `${f.var2},${f.var1}`;
+
             const line = createSVGElement('line', {
                 x1: pos1.x, y1: pos1.y, x2: pos2.x, y2: pos2.y,
-                class: 'edge-line'
+                class: `edge-line ${isSelected ? 'selected' : ''}`
             });
             line.dataset.var1 = f.var1;
             line.dataset.var2 = f.var2;
@@ -296,6 +521,11 @@ function renderGraphFromModel() {
         }
     });
 
+    const transform = `translate(${visualState.offsetX}, ${visualState.offsetY}) scale(${visualState.scale})`;
+    els.nodesLayer.setAttribute('transform', transform);
+    els.edgesLayer.setAttribute('transform', transform);
+    
+
     // 4. Update Sidebar
     updateSidebar(visualState.selectedNode || visualState.selectedEdge);
     console.log("✅ Graph rendered successfully");
@@ -304,6 +534,13 @@ function renderGraphFromModel() {
 // ---- Interaction Handlers ----
 
 function handleNodeMouseDown(e, varName) {
+    // If in Link Mode, handle linking instead of dragging
+    if (visualState.isLinkMode) {
+        handleNodeMouseDownLink(e, varName);
+        return;
+    }
+
+    // Otherwise, handle dragging
     e.preventDefault();
     visualState.isDragging = true;
     visualState.dragTarget = varName;
@@ -316,7 +553,6 @@ function handleNodeMouseDown(e, varName) {
         y: svgPoint.y - pos.y
     };
     
-    // Select the node on drag start
     handleNodeClick(varName);
 }
 
@@ -343,6 +579,19 @@ function handleCanvasClick(e) {
 
 // Global mouse move/up for dragging
 document.addEventListener('mousemove', (e) => {
+    // Handle Link Mode Preview
+    if (visualState.isLinkMode && visualState.linkStartNode) {
+        const previewLine = document.getElementById('preview-line');
+        if (previewLine) {
+            const pos = visualState.nodePositions.get(visualState.linkStartNode);
+            const svgPoint = getSVGPoint(e);
+            previewLine.setAttribute('x2', svgPoint.x);
+            previewLine.setAttribute('y2', svgPoint.y);
+        }
+        return;
+    }
+
+    // Handle Dragging
     if (!visualState.isDragging || !visualState.dragTarget) return;
     
     const svgPoint = getSVGPoint(e);
@@ -352,12 +601,27 @@ document.addEventListener('mousemove', (e) => {
     };
     
     visualState.nodePositions.set(visualState.dragTarget, newPos);
-    
-    // Re-render edges immediately for smooth drag
     renderEdgesOnly();
 });
 
-document.addEventListener('mouseup', () => {
+document.addEventListener('mouseup', (e) => {
+    // Handle Link Mode Completion
+    if (visualState.isLinkMode && visualState.linkStartNode) {
+        // We need to find which node we dropped on.
+        // Since mouseup might be outside a node, we check the target.
+        // If the target is a node group, we use that.
+        const target = e.target;
+        if (target && target.closest('.node-group')) {
+            const varName = target.closest('.node-group').dataset.var;
+            handleNodeMouseUpLink(e, varName);
+        } else {
+            // Dropped on empty space
+            resetLinkPreview();
+        }
+        return;
+    }
+
+    // Handle Dragging End
     visualState.isDragging = false;
     visualState.dragTarget = null;
 });
@@ -594,22 +858,34 @@ function updateSidebar(selection) {
             html += `<p style="font-size: 0.85rem; color: #7f8c8d;">Edit weights below. Default is 1.0.</p>`;
             html += `<div style="overflow-x: auto; margin-top: 10px;">`;
             html += `<table style="border-collapse: collapse; width: 100%;">`;
-            
+
             // Header
             html += `<tr><th></th>`;
             const levels2 = Array.from(model.variables.get(var2).levels.keys());
-            levels2.forEach(lvl => html += `<th style="padding: 5px; border: 1px solid #ddd;">${lvl}</th>`);
+            levels2.forEach(lvl => html += `<th style="padding: 5px; border: 1px solid #ddd; background: #f8f9fa;">${lvl}</th>`);
             html += `</tr>`;
-            
+
             // Rows
             const levels1 = Array.from(model.variables.get(var1).levels.keys());
             levels1.forEach(lvl1 => {
-                html += `<tr><td style="padding: 5px; border: 1px solid #ddd; font-weight: bold;">${lvl1}</td>`;
+                html += `<tr><td style="padding: 5px; border: 1px solid #ddd; font-weight: bold; background: #f8f9fa;">${lvl1}</td>`;
                 levels2.forEach(lvl2 => {
                     const key = `${lvl1},${lvl2}`;
                     const val = factor.entries.get(key) || 1.0;
-                    html += `<td style="padding: 5px; border: 1px solid #ddd;">`;
-                    html += `<input type="number" step="0.1" min="0" value="${val}" id="edge-weight-${var1}-${var2}-${lvl1}-${lvl2}" style="width: 100%; box-sizing: border-box;">`;
+                    
+                    // Calculate color intensity (0.0 to 1.0 mapped to light blue to dark blue)
+                    // Cap at 5.0 for visualization purposes
+                    const intensity = Math.min(val / 5.0, 1.0);
+                    const r = 240 - Math.floor(intensity * 100); // Light to Dark
+                    const g = 240 - Math.floor(intensity * 100);
+                    const b = 255;
+                    const bgColor = `rgb(${r}, ${g}, ${b})`;
+                    
+                    html += `<td style="padding: 2px; border: 1px solid #ddd; text-align: center;">`;
+                    html += `<input type="number" step="0.1" min="0" value="${val}" 
+                                id="edge-weight-${var1}-${var2}-${lvl1}-${lvl2}" 
+                                style="width: 100%; box-sizing: border-box; background: ${bgColor}; border: none; text-align: center;"
+                                onfocus="this.select()">`;
                     html += `</td>`;
                 });
                 html += `</tr>`;
@@ -878,7 +1154,16 @@ async function handleInference() {
 function renderResults(marginals) {
     els.resultsContainer.innerHTML = '';
     
-    for (const [varName, levelProbs] of marginals) {
+    // Sort variables alphabetically
+    const sortedVars = Array.from(marginals.keys()).sort();
+    
+    for (const varName of sortedVars) {
+        const levelProbs = marginals.get(varName);
+        
+        // Sort levels alphabetically
+        const sortedLevels = Array.from(levelProbs.entries())
+            .sort((a, b) => a[0].localeCompare(b[0])); // Sort by level name (a[0])
+        
         const varDiv = document.createElement('div');
         varDiv.className = 'result-variable';
         
@@ -886,11 +1171,8 @@ function renderResults(marginals) {
         title.textContent = varName;
         varDiv.appendChild(title);
         
-        // Sort levels by probability descending
-        const sortedLevels = Array.from(levelProbs.entries())
-            .sort((a, b) => b[1] - a[1]);
-        
         for (const [levelName, prob] of sortedLevels) {
+            // ... (existing bar chart rendering code) ...
             const row = document.createElement('div');
             row.className = 'result-level';
             

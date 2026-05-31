@@ -431,3 +431,47 @@ header h1 {
     background-color: #f8f9fa;
     font-weight: bold;
 }
+
+/* Link Mode Cursor */
+#mrf-canvas.link-mode {
+    cursor: crosshair !important;
+}
+
+/* Preview Line Style */
+#preview-line {
+    stroke: #e67e22;
+    stroke-width: 3;
+    stroke-dasharray: 5, 5;
+    pointer-events: none;
+}
+
+/* Zoom/Pan Cursor */
+#mrf-canvas {
+    cursor: grab;
+}
+
+#mrf-canvas:active {
+    cursor: grabbing;
+}
+
+/* Heatmap Input Styling */
+#sidebar-content input[type="number"] {
+    /* Override default input styles for heatmap cells */
+    padding: 4px;
+    border: none;
+    border-radius: 2px;
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 0.85rem;
+    color: #333;
+    transition: background-color 0.2s;
+}
+
+#sidebar-content input[type="number"]:hover {
+    outline: 2px solid #3498db;
+}
+
+#sidebar-content input[type="number"]:focus {
+    outline: 2px solid #e67e22;
+    background-color: #fff !important; /* White on focus for readability */
+}

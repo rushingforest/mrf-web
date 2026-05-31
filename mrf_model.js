@@ -218,11 +218,17 @@ export class MRFModel {
      * @returns {Map<string, Map<string, number>>} variableName -> (levelName -> probability)
      */
     async infer(iterations = 20) {
+
+        console.log("🚀 INFERENCE STARTED");
+        console.log("Variables:", Array.from(this.variables.keys()));
+        console.log("Unary Factors:", this.unaryFactors.length);
+        console.log("Binary Factors:", this.binaryFactors.length);
+
         if (this.variables.size === 0) {
             throw new Error('No variables defined. Add at least one variable before inference.');
         }
 
-        // Compute degree for each variable (number of bivariate factors it participates in)
+        // Compute degree for each variable
         const degrees = this._computeDegrees();
 
         // Build the graph
@@ -236,8 +242,7 @@ export class MRFModel {
                 if (degree === 0) {
                     throw new Error(
                         `Variable "${name}" has degree 0 (no bivariate factors). ` +
-                        `Isolated variables are not supported by the BP algorithm. ` +
-                        `Connect it to at least one other variable.`
+                        `Isolated variables are not supported. Connect it to at least one other variable.`
                     );
                 }
                 graph.addNode(info.id, degree, info.levels.size);
@@ -245,10 +250,23 @@ export class MRFModel {
             }
 
             // 2. Create and connect unary factors
-            for (const factor of this.unaryFactors) {
-                const info = this.variables.get(factor.variable);
+            // FIX: Ensure EVERY node has a prior, even if the user didn't specify one.
+            for (const [name, info] of this.variables) {
                 const dim = info.levels.size;
-                const dense = this._expandUnary(factor, dim);
+                
+                // Check if the user defined a factor for this variable
+                const userFactor = this.unaryFactors.find(f => f.variable === name);
+                
+                let dense;
+                if (userFactor) {
+                    // Use the user's sparse factor
+                    dense = this._expandUnary(userFactor, dim);
+                } else {
+                    // AUTO-GENERATE: Uniform prior (all 1.0)
+                    dense = new Array(dim).fill(1.0);
+                    console.log(`ℹ️ Auto-generated uniform prior for ${name}`);
+                }
+                
                 graph.setPrior(info.id, dense);
             }
 
@@ -272,7 +290,7 @@ export class MRFModel {
             // 5. Run BP
             graph.runBeliefPropagation(nodeIds, iterations);
 
-            // 6. Extract marginals and map back to string names
+            // 6. Extract marginals
             const marginals = new Map();
             for (const [name, info] of this.variables) {
                 const probs = graph.getMarginal(info.id);
@@ -288,7 +306,6 @@ export class MRFModel {
             return marginals;
 
         } finally {
-            // Always destroy the graph to prevent memory leaks
             graph.destroy();
         }
     }
