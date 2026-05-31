@@ -83,6 +83,10 @@ const els = {
 
     graphToolbar: document.querySelector('.graph-toolbar'), 
 
+    graphResultsPane: document.getElementById('graph-results-pane'),
+    graphResultsContainer: document.getElementById('graph-results-container'),
+    btnToggleResults: document.getElementById('btn-toggle-results'),
+
     modal: document.getElementById('add-node-modal'),
     modalName: document.getElementById('modal-var-name'),
     modalLevels: document.getElementById('modal-var-levels'),
@@ -444,6 +448,19 @@ function setupEventListeners() {
         els.modalLevels.value = '';
         els.modal.classList.remove('hidden');
         els.modalName.focus();
+    });
+
+    els.btnToggleResults.addEventListener('click', () => {
+        els.graphResultsPane.classList.toggle('collapsed');
+        els.btnToggleResults.textContent = els.graphResultsPane.classList.contains('collapsed') ? 'Show' : 'Hide';
+    });
+    
+    // Also allow clicking the header to toggle
+    els.graphResultsPane.querySelector('.pane-header').addEventListener('click', (e) => {
+        if (e.target !== els.btnToggleResults) {
+            els.graphResultsPane.classList.toggle('collapsed');
+            els.btnToggleResults.textContent = els.graphResultsPane.classList.contains('collapsed') ? 'Show' : 'Hide';
+        }
     });
 
     const closeModal = () => els.modal.classList.add('hidden');
@@ -1278,10 +1295,12 @@ async function handleInference() {
     els.loading.textContent = 'Running inference...';
     els.loading.classList.remove('hidden');
     els.resultsContainer.innerHTML = '';
+    els.graphResultsContainer.innerHTML = '<p class="hint">Calculating...</p>';
     
     try {
         const marginals = await model.infer(iterations);
         renderResults(marginals);
+        renderGraphResults(marginals);
     } catch (err) {
         els.resultsContainer.innerHTML = `<div class="error-message" style="padding: 10px;">Inference failed: ${err.message}</div>`;
     } finally {
@@ -1338,6 +1357,61 @@ function renderResults(marginals) {
         }
         
         els.resultsContainer.appendChild(varDiv);
+    }
+}
+
+function renderGraphResults(marginals) {
+    els.graphResultsContainer.innerHTML = '';
+    
+    // Sort variables alphabetically
+    const sortedVars = Array.from(marginals.keys()).sort();
+    
+    if (sortedVars.length === 0) {
+        els.graphResultsContainer.innerHTML = '<p class="hint">No variables to display.</p>';
+        return;
+    }
+    
+    for (const varName of sortedVars) {
+        const levelProbs = marginals.get(varName);
+        
+        // Sort levels alphabetically
+        const sortedLevels = Array.from(levelProbs.entries())
+            .sort((a, b) => a[0].localeCompare(b[0]));
+        
+        const varDiv = document.createElement('div');
+        varDiv.className = 'result-variable';
+        
+        const title = document.createElement('h3');
+        title.textContent = varName;
+        varDiv.appendChild(title);
+        
+        for (const [levelName, prob] of sortedLevels) {
+            const row = document.createElement('div');
+            row.className = 'result-level';
+            
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'level-name';
+            nameSpan.textContent = levelName;
+            
+            const barContainer = document.createElement('div');
+            barContainer.className = 'bar-container';
+            
+            const barFill = document.createElement('div');
+            barFill.className = 'bar-fill';
+            barFill.style.width = `${prob * 100}%`;
+            
+            const probSpan = document.createElement('span');
+            probSpan.className = 'probability';
+            probSpan.textContent = prob.toFixed(4);
+            
+            barContainer.appendChild(barFill);
+            row.appendChild(nameSpan);
+            row.appendChild(barContainer);
+            row.appendChild(probSpan);
+            varDiv.appendChild(row);
+        }
+        
+        els.graphResultsContainer.appendChild(varDiv);
     }
 }
 
