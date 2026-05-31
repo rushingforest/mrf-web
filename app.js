@@ -80,6 +80,18 @@ const els = {
     btnGraphInfer: document.getElementById('btn-graph-infer'),
     btnGraphReset: document.getElementById('btn-graph-reset'),
     graphLoading: document.getElementById('graph-loading'),
+
+    graphToolbar: document.querySelector('.graph-toolbar'), 
+
+    modal: document.getElementById('add-node-modal'),
+    modalName: document.getElementById('modal-var-name'),
+    modalLevels: document.getElementById('modal-var-levels'),
+    modalClose: document.getElementById('modal-close'),
+    modalCancel: document.getElementById('modal-cancel'),
+    modalCreate: document.getElementById('modal-create'),
+    
+    // NEW: Layout Controls (Optional, we will add the button to toolbar)
+    btnAutoLayout: null // Will be created dynamically or added to HTML
 };
 
 // ---- Initialization ----
@@ -263,6 +275,105 @@ function resetLinkPreview() {
     if (previewLine) previewLine.remove();
 }
 
+function runAutoLayout() {
+    const vars = Array.from(model.variables.keys());
+    if (vars.length === 0) return;
+
+    const width = 800; // Canvas width
+    const height = 500; // Canvas height
+    const centerX = width / 2;
+    const centerY = height / 2;
+
+    // Initialize positions randomly around center
+    vars.forEach(name => {
+        if (!visualState.nodePositions.has(name)) {
+            const angle = (vars.indexOf(name) / vars.length) * 2 * Math.PI;
+            const radius = Math.min(width, height) * 0.3;
+            visualState.nodePositions.set(name, {
+                x: centerX + Math.cos(angle) * radius,
+                y: centerY + Math.sin(angle) * radius
+            });
+        }
+    });
+
+    // Simple force-directed simulation (iterative)
+    const iterations = 50;
+    const repulsion = 5000;
+    const springLength = 150;
+    const springStrength = 0.05;
+    const damping = 0.8;
+
+    // Build adjacency list for springs
+    const adj = {};
+    vars.forEach(v => adj[v] = []);
+    model.binaryFactors.forEach(f => {
+        adj[f.var1].push(f.var2);
+        adj[f.var2].push(f.var1);
+    });
+
+    // Simulation loop
+    for (let i = 0; i < iterations; i++) {
+        const forces = {};
+        vars.forEach(v => forces[v] = { x: 0, y: 0 });
+
+        // Repulsion (all nodes push apart)
+        for (let i = 0; i < vars.length; i++) {
+            for (let j = i + 1; j < vars.length; j++) {
+                const v1 = vars[i];
+                const v2 = vars[j];
+                const p1 = visualState.nodePositions.get(v1);
+                const p2 = visualState.nodePositions.get(v2);
+                
+                const dx = p1.x - p2.x;
+                const dy = p1.y - p2.y;
+                const distSq = dx * dx + dy * dy || 1;
+                const dist = Math.sqrt(distSq);
+                
+                const force = repulsion / distSq;
+                const fx = (dx / dist) * force;
+                const fy = (dy / dist) * force;
+                
+                forces[v1].x += fx;
+                forces[v1].y += fy;
+                forces[v2].x -= fx;
+                forces[v2].y -= fy;
+            }
+        }
+
+        // Spring (connected nodes pull together)
+        vars.forEach(v => {
+            adj[v].forEach(neighbor => {
+                const p1 = visualState.nodePositions.get(v);
+                const p2 = visualState.nodePositions.get(neighbor);
+                
+                const dx = p2.x - p1.x;
+                const dy = p2.y - p1.y;
+                const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                
+                const force = (dist - springLength) * springStrength;
+                const fx = (dx / dist) * force;
+                const fy = (dy / dist) * force;
+                
+                forces[v].x += fx;
+                forces[v].y += fy;
+            });
+        });
+
+        // Apply forces
+        vars.forEach(v => {
+            const pos = visualState.nodePositions.get(v);
+            pos.x += forces[v].x * damping;
+            pos.y += forces[v].y * damping;
+            
+            // Boundary constraints
+            pos.x = Math.max(50, Math.min(width - 50, pos.x));
+            pos.y = Math.max(50, Math.min(height - 50, pos.y));
+        });
+    }
+
+    renderGraphFromModel();
+}
+
 // ---- Event Listeners ----
 
 function setupEventListeners() {
@@ -329,18 +440,38 @@ function setupEventListeners() {
 
     // Graph Toolbar
     els.btnAddNode.addEventListener('click', () => {
-        // Placeholder for Phase 5
-        const name = prompt("Enter variable name:");
-        if (!name) return;
-        const levelsStr = prompt("Enter levels (comma-separated):");
-        if (!levelsStr) return;
-        const levels = levelsStr.split(',').map(l => l.trim()).filter(l => l);
-        if (levels.length === 0) {
+        els.modalName.value = '';
+        els.modalLevels.value = '';
+        els.modal.classList.remove('hidden');
+        els.modalName.focus();
+    });
+
+    const closeModal = () => els.modal.classList.add('hidden');
+    els.modalClose.addEventListener('click', closeModal);
+    els.modalCancel.addEventListener('click', closeModal);
+
+    els.modalCreate.addEventListener('click', () => {
+        const name = els.modalName.value.trim();
+        const levelsStr = els.modalLevels.value.trim();
+        
+        if (!name) {
+            alert("Variable name is required.");
+            return;
+        }
+        if (!levelsStr) {
             alert("At least one level is required.");
             return;
         }
+        
+        const levels = levelsStr.split(',').map(l => l.trim()).filter(l => l);
+        if (levels.length === 0) {
+            alert("No valid levels found.");
+            return;
+        }
+        
         try {
             model.addVariable(name, levels);
+            closeModal();
             renderGraphFromModel();
             renderVariables();
             updateAllDropdowns();
@@ -349,8 +480,16 @@ function setupEventListeners() {
         }
     });
 
+    els.modal.addEventListener('click', (e) => {
+        if (e.target === els.modal) closeModal();
+    });
+
+    const btnAutoLayout = document.getElementById('btn-auto-layout');
+    if (btnAutoLayout) {
+        btnAutoLayout.addEventListener('click', runAutoLayout);
+    }
+
     els.btnLinkMode.addEventListener('click', toggleLinkMode);
-    
     els.btnDeleteSelected.addEventListener('click', handleDeleteSelected);
     
     els.btnGraphInfer.addEventListener('click', handleInference);
